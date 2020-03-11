@@ -34,7 +34,7 @@ defmodule NervesTime.RTC.DS3231 do
   require Logger
 
   alias Circuits.I2C
-  alias NervesTime.RTC.DS3231.{Date, Status}
+  alias NervesTime.RTC.DS3231.{Alarm, Control, Date, Status, Temperature}
 
   @default_address 0x68
   @default_bus_name "i2c-1"
@@ -87,12 +87,9 @@ defmodule NervesTime.RTC.DS3231 do
 
   @impl NervesTime.RealTimeClock
   def set_time(state, now) do
-    with {:ok, date_registers} <- Date.encode(now, state.century_0, state.century_1),
-         {:ok, status_registers} <- I2C.write_read(state.i2c, state.address, <<0x0F>>, 1),
-         {:ok, status_data} <- Status.decode(status_registers),
-         {:ok, status_registers} <- Status.encode(%{status_data | osc_stop_flag: 0}),
-         :ok <- I2C.write(state.i2c, state.address, [0x00, date_registers]),
-         :ok <- I2C.write(state.i2c, state.address, [0x0F, status_registers]) do
+    with {:ok, status_data} <- get_status(state.i2c, state.address),
+         :ok <- set(state.i2c, state.address, 0x0F, now, Date),
+         :ok <- set_status(state.i2c, state.address, %{status_data | osc_stop_flag: 0}) do
       state
     else
       error ->
@@ -110,6 +107,48 @@ defmodule NervesTime.RTC.DS3231 do
       any_error ->
         _ = Logger.error("DS3231 RTC not set or has an error: #{inspect(any_error)}")
         {:unset, state}
+    end
+  end
+
+  @doc "Reads the status register."
+  def get_status(i2c, address), do: get(i2c, address, 0x0F, 1, Status)
+
+  @doc "Writes the status register."
+  def set_status(i2c, address, status), do: set(i2c, address, 0x0F, status, Status)
+
+  @doc "Reads the control register."
+  def get_control(i2c, address), do: get(i2c, address, 0x0E, 1, Control)
+
+  @doc "Writes the control register."
+  def set_control(i2c, address, control), do: set(i2c, address, 0x0E, control, Control)
+  @doc "Reads an alarm register."
+  def get_alarm(i2c, address, 1 = _alarm_num), do: get(i2c, address, 0x07, 4, Alarm)
+  def get_alarm(i2c, address, 2 = _alarm_num), do: get(i2c, address, 0x0B, 3, Alarm)
+
+  @doc "Writes an alarm register."
+  def set_alarm(i2c, address, %{seconds: _} = a1), do: set(i2c, address, 0x07, a1, Alarm)
+  def set_alarm(i2c, address, a2), do: set(i2c, address, 0x0B, a2, Alarm)
+
+  @doc "Reads the temperature register."
+  def get_temperature(i2c, address), do: get(i2c, address, 0x11, 2, Temperature)
+
+  defp set(i2c, address, offset, data, module) do
+    with {:ok, bin} <- module.encode(data),
+         :ok <- I2C.write(i2c, address, [offset, bin]) do
+      :ok
+    else
+      {:error, _} = e -> e
+      e -> {:error, e}
+    end
+  end
+
+  defp get(i2c, address, offset, length, module) do
+    with {:ok, bin} <- I2C.write_read(i2c, address, <<offset>>, length),
+         {:ok, data} <- module.decode(bin) do
+      {:ok, data}
+    else
+      {:error, _} = e -> e
+      e -> {:error, e}
     end
   end
 end
