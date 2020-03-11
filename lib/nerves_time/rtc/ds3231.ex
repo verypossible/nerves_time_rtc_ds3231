@@ -86,14 +86,15 @@ defmodule NervesTime.RTC.DS3231 do
   def terminate(_state), do: :ok
 
   @impl NervesTime.RealTimeClock
-  def set_time(state, now) do
+  def set_time(state, date_data) do
     with {:ok, status_data} <- get_status(state.i2c, state.address),
-         :ok <- set(state.i2c, state.address, 0x0F, now, Date),
+         {:ok, date_bin} <- Date.encode(date_data, state.century_0, state.century_1),
+         :ok <- I2C.write(state.i2c, state.address, [0x0F, date_bin]),
          :ok <- set_status(state.i2c, state.address, %{status_data | osc_stop_flag: 0}) do
       state
     else
       error ->
-        _ = Logger.error("Error setting DS3231 RTC to #{inspect(now)}: #{inspect(error)}")
+        _ = Logger.error("Error setting DS3231 RTC to #{inspect(date_data)}: #{inspect(error)}")
         state
     end
   end
